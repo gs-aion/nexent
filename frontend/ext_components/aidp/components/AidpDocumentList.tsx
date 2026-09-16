@@ -13,6 +13,7 @@ import type { AidpDocumentItem } from "@/ext_components/aidp/services/aidpKnowle
 import aidpKnowledgeService from "@/ext_components/aidp/services/aidpKnowledgeService";
 import { AIDP_ACCEPT_STRING } from "@/const/knowledgeBase";
 import { partitionAidpFiles } from "@/services/uploadService";
+import { TruncatedText } from "@/components/common/TruncatedText";
 
 const { Dragger } = Upload;
 
@@ -44,6 +45,20 @@ const isDuplicateUploadReason = (
     haystack.includes(marker)
   );
 };
+
+/** Table cell showing a document name above its AIDP file id. */
+const DocumentNameCell: React.FC<{ fileName: string; fileInoNo: string }> = ({
+  fileName,
+  fileInoNo,
+}) => (
+  <td className="px-4 py-2">
+    <TruncatedText
+      text={fileName}
+      className="text-sm font-medium text-gray-800 truncate max-w-[250px]"
+    />
+    <div className="text-xs text-gray-400">{fileInoNo}</div>
+  </td>
+);
 
 interface AidpDocumentListProps {
   activeKb: AidpKnowledgeBaseItem | null;
@@ -172,9 +187,11 @@ const AidpDocumentList: React.FC<AidpDocumentListProps> = ({
       <div className="p-4 border-b border-gray-200">
         <div className="flex items-center justify-between">
           <div className="flex items-center gap-3">
-            <h3 className="text-base font-semibold text-blue-500 truncate">
-              {activeKb?.kds_name || ""}
-            </h3>
+            <TruncatedText
+              as="h3"
+              text={activeKb?.kds_name || ""}
+              className="text-base font-semibold text-blue-500 truncate"
+            />
             <span className="inline-flex items-center px-2 py-0.5 rounded text-xs bg-gray-100 text-gray-600 border border-gray-200">
               {t("aidpKnowledge.tagDocs", { count: totalDocs })}
             </span>
@@ -223,17 +240,10 @@ const AidpDocumentList: React.FC<AidpDocumentListProps> = ({
               <tbody className="divide-y divide-gray-200">
                 {documents.map((doc) => (
                   <tr key={doc.file_ino_no} className="hover:bg-gray-50">
-                    <td className="px-4 py-2">
-                      <div
-                        className="text-sm font-medium text-gray-800 truncate max-w-[250px]"
-                        title={doc.file_name}
-                      >
-                        {doc.file_name}
-                      </div>
-                      <div className="text-xs text-gray-400">
-                        {doc.file_ino_no}
-                      </div>
-                    </td>
+                    <DocumentNameCell
+                      fileName={doc.file_name}
+                      fileInoNo={doc.file_ino_no}
+                    />
                     <td className="px-4 py-2 text-sm text-gray-600">
                       {doc.file_type || "-"}
                     </td>

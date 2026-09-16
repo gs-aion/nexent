@@ -13,6 +13,7 @@ import type { AidpKnowledgeBaseItem } from "@/types/agentConfig";
 import { useGroupList } from "@/hooks/group/useGroupList";
 import { useAuthorizationContext } from "@/components/providers/AuthorizationProvider";
 import { Can } from "@/components/permission/Can";
+import { TruncatedText } from "@/components/common/TruncatedText";
 
 interface AidpKnowledgeListProps {
   kbs: AidpKnowledgeBaseItem[];
@@ -157,12 +158,11 @@ const AidpKnowledgeList: React.FC<AidpKnowledgeListProps> = ({
                   <div className="flex items-start justify-between">
                     <div className="flex-1 min-w-0 mr-2">
                       <div className="flex items-center gap-2 flex-wrap">
-                        <p
+                        <TruncatedText
+                          as="p"
+                          text={kb.kds_name}
                           className="text-sm font-medium text-gray-800 truncate"
-                          title={kb.kds_name}
-                        >
-                          {kb.kds_name}
-                        </p>
+                        />
                         {isUnavailable && (
                           <Tag color="default">
                             {t("aidpKnowledge.kbUnavailable")}
