@@ -3970,6 +3970,7 @@
   "aidpKnowledge.uploadSuccess": "成功上传 {{count}} 个文档",
   "aidpKnowledge.uploadPartial": "{{success}} 个上传成功，{{failed}} 个失败",
   "aidpKnowledge.uploadFailed": "上传失败",
+  "aidpKnowledge.uploadDuplicateFile": "\"{{fileName}}\"：文件已存在，请勿重复上传。",
   "aidpKnowledge.uploading": "正在上传...",
   "aidpKnowledge.uploadHint": "点击或拖拽文件到此处上传",
   "aidpKnowledge.uploadHintCount": "单次上传数量不超过 50 个",

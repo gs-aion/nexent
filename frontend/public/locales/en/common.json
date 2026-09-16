@@ -4241,6 +4241,7 @@
   "aidpKnowledge.uploadSuccess": "{{count}} document(s) uploaded successfully",
   "aidpKnowledge.uploadPartial": "{{success}} uploaded, {{failed}} failed",
   "aidpKnowledge.uploadFailed": "Upload failed",
+  "aidpKnowledge.uploadDuplicateFile": "\"{{fileName}}\" already exists. Please do not upload it again.",
   "aidpKnowledge.uploading": "Uploading...",
   "aidpKnowledge.uploadHint": "Click or drag files here to upload",
   "aidpKnowledge.uploadHintCount": "Up to 50 files per upload",

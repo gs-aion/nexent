@@ -16,6 +16,35 @@ import { partitionAidpFiles } from "@/services/uploadService";
 
 const { Dragger } = Upload;
 
+// AIDP rejects a re-uploaded file with a per-file reason, but that reason is
+// shaped exactly like any other upload failure — the user cannot tell a
+// duplicate apart from a genuine error. The wording AIDP actually returns is
+// "文件已存在，请重命名或删除已有文件" / "File already exists. Please rename or
+// delete the existing file.", which never contains the literal word
+// "duplicate". Match on those phrases in BOTH languages (the backend returns
+// reason_zh and reason_en together, independently of the UI language) plus the
+// generic duplicate markers, case-insensitively so upstream capitalisation
+// changes cannot silently break the detection.
+const DUPLICATE_UPLOAD_REASON_MARKERS = [
+  "already exists",
+  "duplicate",
+  "已存在",
+  "重复",
+];
+
+const isDuplicateUploadReason = (
+  ...reasons: Array<string | undefined>
+): boolean => {
+  const haystack = reasons
+    .filter((reason): reason is string => Boolean(reason))
+    .join(" ")
+    .toLowerCase();
+  if (!haystack) return false;
+  return DUPLICATE_UPLOAD_REASON_MARKERS.some((marker) =>
+    haystack.includes(marker)
+  );
+};
+
 interface AidpDocumentListProps {
   activeKb: AidpKnowledgeBaseItem | null;
   documents: AidpDocumentItem[];
@@ -69,6 +98,15 @@ const AidpDocumentList: React.FC<AidpDocumentListProps> = ({
         );
 
         const failureDetails = result.failed_list.map((item) => {
+          // A duplicate is not an error the user can debug, so give it a
+          // dedicated message instead of echoing AIDP's "please rename or
+          // delete" instruction, which is not actionable in this dialog.
+          if (isDuplicateUploadReason(item.reason_zh, item.reason_en)) {
+            return t("aidpKnowledge.uploadDuplicateFile", {
+              fileName: item.file_name,
+            });
+          }
+
           const reason = i18n.language.startsWith("zh")
             ? item.reason_zh || item.reason_en
             : item.reason_en || item.reason_zh;
