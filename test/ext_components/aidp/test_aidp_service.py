@@ -277,6 +277,59 @@ class TestFetchAllAidpKnowledgeBasesImpl:
             "http://127.0.0.1:30081/KnowledgeBase/Tenants/aidp/KnowledgeBases?page=2&page_size=100",
         ]
 
+    def test_forwards_url_encoded_keyword_on_every_page(self, aidp_service_module):
+        """The keyword rides along on every list request, percent-encoded."""
+        aidp_service_module.count_aidp_kbs_impl.return_value = 101
+        page1 = MagicMock(status_code=200)
+        page1.raise_for_status.return_value = None
+        page1.json.return_value = {"value": [{"kds_id": "kb-1"}], "next_link": None}
+        page2 = MagicMock(status_code=200)
+        page2.raise_for_status.return_value = None
+        page2.json.return_value = {"value": [{"kds_id": "kb-1"}], "next_link": None}
+        mock_client = MagicMock()
+        mock_client.get.side_effect = [page1, page2]
+        mock_manager = MagicMock()
+        mock_manager.get_sync_client.return_value = mock_client
+        aidp_service_module.http_client_manager = mock_manager
+
+        aidp_service_module.fetch_all_aidp_knowledge_bases_impl(
+            server_url="http://127.0.0.1:30081",
+            api_key="jwt-token",
+            keyword="季度 报告",
+        )
+
+        encoded = "%E5%AD%A3%E5%BA%A6%20%E6%8A%A5%E5%91%8A"
+        requested_urls = [call.args[0] for call in mock_client.get.call_args_list]
+        assert requested_urls == [
+            "http://127.0.0.1:30081/KnowledgeBase/Tenants/aidp/KnowledgeBases"
+            f"?page=1&page_size=100&keyword={encoded}",
+            "http://127.0.0.1:30081/KnowledgeBase/Tenants/aidp/KnowledgeBases"
+            f"?page=2&page_size=100&keyword={encoded}",
+        ]
+
+    def test_omits_keyword_parameter_when_blank(self, aidp_service_module):
+        """A blank keyword must produce the same URL as an unfiltered call."""
+        aidp_service_module.count_aidp_kbs_impl.return_value = 1
+        page1 = MagicMock(status_code=200)
+        page1.raise_for_status.return_value = None
+        page1.json.return_value = {"value": [{"kds_id": "kb-1"}], "next_link": None}
+        mock_client = MagicMock()
+        mock_client.get.return_value = page1
+        mock_manager = MagicMock()
+        mock_manager.get_sync_client.return_value = mock_client
+        aidp_service_module.http_client_manager = mock_manager
+
+        aidp_service_module.fetch_all_aidp_knowledge_bases_impl(
+            server_url="http://127.0.0.1:30081",
+            api_key="jwt-token",
+            keyword="   ",
+        )
+
+        assert mock_client.get.call_args.args[0] == (
+            "http://127.0.0.1:30081/KnowledgeBase/Tenants/aidp/KnowledgeBases"
+            "?page=1&page_size=100"
+        )
+
     def test_deduplicates_kds_ids_across_pages(self, aidp_service_module):
         aidp_service_module.count_aidp_kbs_impl.return_value = 101
         page1 = MagicMock(status_code=200)

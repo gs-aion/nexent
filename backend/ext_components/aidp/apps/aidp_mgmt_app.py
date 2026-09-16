@@ -262,8 +262,16 @@ def _is_user_role(user_id: str, tenant_id: str) -> bool:
     return (role or "USER").upper() == "USER"
 
 
-def _current_accessible_rows(user_id: str, tenant_id: str) -> list[dict]:
-    """Return the current AIDP catalog intersected with local user access."""
+def _current_accessible_rows(
+    user_id: str,
+    tenant_id: str,
+    keyword: str | None = None,
+) -> list[dict]:
+    """Return the current AIDP catalog intersected with local user access.
+
+    ``keyword`` is forwarded to AIDP so the remote catalog is already narrowed
+    before the permission intersection runs.
+    """
     server_url, api_key = _credentials()
     snapshot = resolve_current_aidp_access(
         server_url=server_url,
@@ -271,6 +279,7 @@ def _current_accessible_rows(user_id: str, tenant_id: str) -> list[dict]:
         user_id=user_id,
         tenant_id=tenant_id,
         aidp_tenant_id="aidp",
+        keyword=keyword,
     )
     return snapshot.accessible_rows
 
@@ -325,19 +334,30 @@ async def list_knowledge_bases(
     request: Request,
     page: Annotated[int, Query(ge=1, description="Page number starting from 1")] = 1,
     page_size: Annotated[int, Query(ge=1, le=100, description="Page size from 1 to 100")] = 10,
+    keyword: Annotated[
+        str | None,
+        Query(max_length=200, description="Optional name filter forwarded to AIDP"),
+    ] = None,
 ) -> JSONResponse:
-    """List KBs the caller can access.
+    """List KBs the caller can access, optionally filtered by name.
 
     Resolution order:
-    1. Fetch every KB visible to the currently configured AIDP credentials.
+    1. Fetch the AIDP catalog visible to the configured credentials, narrowed
+       server-side by ``keyword`` when one is supplied.
     2. Intersect that catalog with the caller's effective Nexent permissions.
     3. Paginate the intersection, then fetch details for the visible page.
+
+    A non-blank ``keyword`` therefore narrows both the fetched set and the
+    reported ``total_count``: both describe the filtered, permission-scoped set.
     """
     user_id, tenant_id = await _auth(request)
 
     server_url, api_key = _credentials()
+    normalized_keyword = (keyword or "").strip() or None
     started_at = time.perf_counter()
-    rows = await asyncio.to_thread(_current_accessible_rows, user_id, tenant_id)
+    rows = await asyncio.to_thread(
+        _current_accessible_rows, user_id, tenant_id, normalized_keyword
+    )
     access_resolve_ms = (time.perf_counter() - started_at) * 1000
     total_count = len(rows)
     if total_count == 0:

@@ -6,7 +6,7 @@ import logging
 import time
 from datetime import datetime, timezone
 from typing import Any, Callable, Dict, List
-from urllib.parse import urljoin
+from urllib.parse import quote, urljoin
 
 import httpx
 
@@ -111,6 +111,21 @@ def _resolve_tenant_id(tenant_id: Any = None) -> str:
 def _get_list_path(tenant_id: str | None = None) -> str:
     """Build the tenant-scoped knowledge-base API path."""
     return f"/KnowledgeBase/Tenants/{_resolve_tenant_id(tenant_id)}/KnowledgeBases"
+
+
+def _build_list_query(page: int, page_size: int, keyword: str | None = None) -> str:
+    """Build the query string for a knowledge-base list request.
+
+    AIDP applies ``keyword`` server-side (matching on the KB name), so the
+    value is forwarded verbatim. The parameter is omitted entirely when no
+    keyword is supplied, which keeps plain listing requests byte-identical to
+    the pre-search behaviour (same URL, so upstream caches still hit).
+    """
+    query = f"?page={page}&page_size={page_size}"
+    normalized_keyword = (keyword or "").strip()
+    if normalized_keyword:
+        query += f"&keyword={quote(normalized_keyword, safe='')}"
+    return query
 
 
 def _timestamp_to_iso(value: Any) -> str | None:
@@ -260,8 +275,12 @@ def fetch_aidp_knowledge_bases_impl(
     api_key: str,
     page: int = 1,
     page_size: int = 10,
+    keyword: str | None = None,
 ) -> Dict[str, Any]:
-    """Fetch a single page from AIDP API (simple passthrough)."""
+    """Fetch a single page from AIDP API (simple passthrough).
+
+    ``keyword`` is forwarded to AIDP as an optional server-side filter.
+    """
     normalized_url = _validate_params(server_url, api_key)
 
     headers = {
@@ -269,7 +288,7 @@ def fetch_aidp_knowledge_bases_impl(
         "Content-Type": "application/json",
     }
 
-    list_path = f"{_get_list_path()}?page={page}&page_size={page_size}"
+    list_path = f"{_get_list_path()}{_build_list_query(page, page_size, keyword)}"
     list_url = urljoin(f"{normalized_url}/", list_path)
     logger.info("Fetching AIDP knowledge bases from %s", list_url)
 
@@ -346,6 +365,7 @@ def _normalize_response(raw: Dict[str, Any]) -> Dict[str, Any]:
 def fetch_all_aidp_knowledge_bases_impl(
     server_url: str,
     api_key: str,
+    keyword: str | None = None,
 ) -> Dict[str, Any]:
     """Fetch every AIDP knowledge-base page using the dedicated Count API.
 
@@ -354,6 +374,12 @@ def fetch_all_aidp_knowledge_bases_impl(
     the number of pages, and every list request uses the configured tenant.
     Duplicate resources are removed by ``kds_id`` while preserving their
     first-seen order.
+
+    ``keyword`` is forwarded to every list call so AIDP filters server-side.
+    The Count API has no keyword support, so the page count is deliberately
+    derived from the unfiltered total: AIDP returns the matching subset on the
+    earliest pages and empty pages afterwards, which this loop tolerates. The
+    caller therefore still receives every match.
     """
     normalized_url = _validate_params(server_url, api_key)
     page_size = 100
@@ -395,7 +421,10 @@ def fetch_all_aidp_knowledge_bases_impl(
         list_started_at = time.perf_counter()
 
         for current_page in range(1, total_pages + 1):
-            page_path = f"{_get_list_path()}?page={current_page}&page_size={page_size}"
+            page_path = (
+                f"{_get_list_path()}"
+                f"{_build_list_query(current_page, page_size, keyword)}"
+            )
             current_url = urljoin(f"{normalized_url}/", page_path)
 
             logger.info(

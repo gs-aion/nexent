@@ -3928,6 +3928,8 @@
   "aidpKnowledge.kbUnavailable": "不可用",
   "aidpKnowledge.createKb": "创建知识库",
   "aidpKnowledge.refresh": "刷新",
+  "aidpKnowledge.searchPlaceholder": "搜索知识库名称",
+  "aidpKnowledge.searchEmpty": "没有匹配的知识库",
   "aidpKnowledge.listEmpty": "暂无知识库",
   "aidpKnowledge.tagDocs": "文档: {{count}}",
   "aidpKnowledge.tagChunks": "分块: {{count}}",

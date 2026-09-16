@@ -568,12 +568,51 @@ class TestListKnowledgeBases:
             user_id=USER_ID,
             tenant_id=TENANT_ID,
             aidp_tenant_id="aidp",
+            keyword=None,
         )
         mock_detail.assert_called_once_with(
             aidp_mgmt_app.AIDP_SERVER_URL,
             aidp_mgmt_app.AIDP_API_KEY,
             "kb-2",
         )
+
+    def test_list_forwards_trimmed_keyword_to_aidp(self):
+        """A keyword is trimmed before it reaches AIDP."""
+        client = _client()
+        from ext_components.aidp.apps import aidp_mgmt_app
+        from types import SimpleNamespace
+
+        with patch.object(
+            aidp_mgmt_app,
+            "resolve_current_aidp_access",
+            return_value=SimpleNamespace(accessible_rows=[]),
+        ) as mock_snapshot:
+            response = client.get(
+                "/aidp-mgmt/knowledge-bases?keyword=%20report%20",
+                headers=_bearer(),
+            )
+
+        assert response.status_code == HTTPStatus.OK
+        assert mock_snapshot.call_args.kwargs["keyword"] == "report"
+
+    def test_list_treats_blank_keyword_as_unfiltered(self):
+        """A whitespace-only keyword must not narrow the listing."""
+        client = _client()
+        from ext_components.aidp.apps import aidp_mgmt_app
+        from types import SimpleNamespace
+
+        with patch.object(
+            aidp_mgmt_app,
+            "resolve_current_aidp_access",
+            return_value=SimpleNamespace(accessible_rows=[]),
+        ) as mock_snapshot:
+            response = client.get(
+                "/aidp-mgmt/knowledge-bases?keyword=%20%20",
+                headers=_bearer(),
+            )
+
+        assert response.status_code == HTTPStatus.OK
+        assert mock_snapshot.call_args.kwargs["keyword"] is None
 
     def test_list_skips_detail_when_catalog_row_has_card_metadata(self):
         client = _client()

@@ -11,6 +11,7 @@ import {
   TWO_COLUMN_LAYOUT,
   STANDARD_CARD,
 } from "@/const/layoutConstants";
+import { KB_SEARCH_DEBOUNCE_MS } from "@/const/knowledgeBase";
 import type { AidpKnowledgeBaseItem } from "@/types/agentConfig";
 import aidpKnowledgeService, {
   type AidpKbDetail,
@@ -59,35 +60,56 @@ const AidpKnowledgeConfiguration: React.FC = () => {
   const [updateModalOpen, setUpdateModalOpen] = useState(false);
   const [editingKb, setEditingKb] = useState<AidpKnowledgeBaseItem | null>(null);
 
-  // ---- Fetch KB list (server-side pagination: each page fetches page_size items + Count total) ----
-  const fetchKbs = useCallback(async (page: number = 1) => {
-    setLoadingKbs(true);
-    try {
-      const result = await aidpKnowledgeService.listKbs(
-        page,
-        KB_PAGE_SIZE,
-      );
-      setKbs(result.value);
-      setKbTotal(result.total_count ?? result.value.length);
-      setKbHasMore(result.has_more ?? false);
-      setKbTotalReliable(result.total_reliable !== false);
-      setKbPage(page);
-    } catch (error) {
-      log.error("Failed to fetch AIDP knowledge bases:", error);
-      appMessage.error(t("aidpKnowledge.fetchKbsFailed"));
-      setKbs([]);
-      setKbTotal(0);
-      setKbHasMore(false);
-      setKbTotalReliable(false);
-    } finally {
-      setLoadingKbs(false);
-    }
-  }, [appMessage, t]);
+  // ---- Keyword search state ----
+  // `kbKeyword` is the raw input value and keeps the text field responsive;
+  // `debouncedKbKeyword` is what actually drives requests. Splitting them means
+  // typing never waits on the network, and a pause settles on one request.
+  const [kbKeyword, setKbKeyword] = useState("");
+  const [debouncedKbKeyword, setDebouncedKbKeyword] = useState("");
 
-  // Auto-fetch on mount
   useEffect(() => {
-    fetchKbs();
-  }, [fetchKbs]);
+    const timer = setTimeout(() => {
+      setDebouncedKbKeyword(kbKeyword.trim());
+    }, KB_SEARCH_DEBOUNCE_MS);
+    return () => clearTimeout(timer);
+  }, [kbKeyword]);
+
+  // ---- Fetch KB list (server-side pagination: each page fetches page_size items + Count total) ----
+  const fetchKbs = useCallback(
+    async (page: number = 1, keyword: string = "") => {
+      setLoadingKbs(true);
+      try {
+        const result = await aidpKnowledgeService.listKbs(
+          page,
+          KB_PAGE_SIZE,
+          keyword,
+        );
+        setKbs(result.value);
+        setKbTotal(result.total_count ?? result.value.length);
+        setKbHasMore(result.has_more ?? false);
+        setKbTotalReliable(result.total_reliable !== false);
+        setKbPage(page);
+      } catch (error) {
+        log.error("Failed to fetch AIDP knowledge bases:", error);
+        appMessage.error(t("aidpKnowledge.fetchKbsFailed"));
+        setKbs([]);
+        setKbTotal(0);
+        setKbHasMore(false);
+        setKbTotalReliable(false);
+      } finally {
+        setLoadingKbs(false);
+      }
+    },
+    [appMessage, t]
+  );
+
+  // Fetch on mount, and again whenever the debounced keyword settles.
+  // Every keyword change restarts at page 1 on purpose: the previous page
+  // number is meaningless against a different result set and would otherwise
+  // render an empty list whenever the filtered set is shorter than that page.
+  useEffect(() => {
+    fetchKbs(1, debouncedKbKeyword);
+  }, [fetchKbs, debouncedKbKeyword]);
 
   // ---- Cleanup legacy localStorage credentials on mount ----
   // v7.1: AIDP credentials moved backend-side; frontends that pre-date the
@@ -176,15 +198,15 @@ const AidpKnowledgeConfiguration: React.FC = () => {
               setDocPage(1);
             }
 
-            // Refresh list
-            fetchKbs(kbPage);
+            // Refresh list, keeping the active search filter applied
+            fetchKbs(kbPage, debouncedKbKeyword);
           } catch (error) {
             appMessage.error(t("aidpKnowledge.deleteKbFailed"));
           }
         },
       });
     },
-    [activeKbId, appMessage, t, fetchKbs, kbPage]
+    [activeKbId, appMessage, t, fetchKbs, kbPage, debouncedKbKeyword]
   );
 
   // ---- Edit KB ----
@@ -300,9 +322,11 @@ const AidpKnowledgeConfiguration: React.FC = () => {
               hasMore={kbHasMore}
               currentPage={kbPage}
               pageSize={KB_PAGE_SIZE}
-              onPageChange={(page) => fetchKbs(page)}
+              keyword={kbKeyword}
+              onKeywordChange={setKbKeyword}
+              onPageChange={(page) => fetchKbs(page, debouncedKbKeyword)}
               onSelect={handleSelectKb}
-              onRefresh={() => fetchKbs(kbPage)}
+              onRefresh={() => fetchKbs(kbPage, debouncedKbKeyword)}
               onCreateNew={() => setCreateModalOpen(true)}
               onEdit={handleEditKb}
               onDelete={handleDeleteKb}

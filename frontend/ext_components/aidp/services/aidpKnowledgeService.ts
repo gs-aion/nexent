@@ -174,15 +174,21 @@ function buildUrl(
 
 class AidpKnowledgeService {
   /**
-   * List knowledge bases (paginated).
+   * List knowledge bases (paginated), optionally filtered by name.
+   *
+   * `keyword` is forwarded to the backend, which passes it on to AIDP for
+   * server-side filtering. A blank keyword is omitted from the query string
+   * entirely so an unfiltered call produces the same request as before.
    */
   async listKbs(
     page: number = 1,
-    pageSize: number = 10
+    pageSize: number = 10,
+    keyword?: string
   ): Promise<AidpKnowledgeBaseListResponse> {
     const url = buildUrl(API_ENDPOINTS.aidpMgmt.knowledgeBases, {
       page,
       page_size: pageSize,
+      keyword: keyword?.trim() || undefined,
     });
 
     const response = await fetchWithErrorHandling(url, {

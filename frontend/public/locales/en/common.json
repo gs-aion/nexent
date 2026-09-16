@@ -4199,6 +4199,8 @@
   "aidpKnowledge.kbUnavailable": "Unavailable",
   "aidpKnowledge.createKb": "Create Knowledge Base",
   "aidpKnowledge.refresh": "Refresh",
+  "aidpKnowledge.searchPlaceholder": "Search knowledge bases",
+  "aidpKnowledge.searchEmpty": "No matching knowledge bases",
   "aidpKnowledge.listEmpty": "No knowledge bases found",
   "aidpKnowledge.tagDocs": "docs: {{count}}",
   "aidpKnowledge.tagChunks": "chunks: {{count}}",

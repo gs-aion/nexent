@@ -31,6 +31,12 @@ _doc_count_inflight: dict[tuple[str, str, str], Future[Any]] = {}
 _catalog_versions: dict[tuple[str, str], int] = {}
 _detail_versions: dict[tuple[str, str, str], int] = {}
 _doc_count_versions: dict[tuple[str, str, str], int] = {}
+# Keyword-filtered catalogs live in their own namespace. Sharing ``_catalog_cache``
+# would let a search result overwrite the full catalog under the same key and
+# silently hide KBs from every non-search caller for the rest of the TTL.
+_search_catalog_cache: OrderedDict[tuple[str, str, str], tuple[float, list[dict]]] = OrderedDict()
+_search_catalog_inflight: dict[tuple[str, str, str], Future[Any]] = {}
+_search_catalog_versions: dict[tuple[str, str, str], int] = {}
 _cache_lock = threading.RLock()
 
 _T = TypeVar("_T")
@@ -134,13 +140,39 @@ def _get_remote_catalog(
     api_key: str,
     aidp_tenant_id: str,
     force_refresh: bool,
+    keyword: str | None = None,
 ) -> list[dict]:
-    key = _cache_key(server_url, aidp_tenant_id)
+    """Return the remote KB catalog, optionally filtered server-side by keyword.
+
+    Keyword-filtered results are cached in their own namespace. Both variants
+    come from the same endpoint but describe different sets, so sharing a cache
+    slot would let a search response mask the full catalog (or vice versa) for
+    the remainder of the TTL.
+    """
+    normalized_keyword = (keyword or "").strip()
+    catalog_key = _cache_key(server_url, aidp_tenant_id)
+
+    if normalized_keyword:
+        return _get_or_load_cached(
+            cache=_search_catalog_cache,
+            inflight=_search_catalog_inflight,
+            versions=_search_catalog_versions,
+            key=(*catalog_key, normalized_keyword.lower()),
+            ttl_seconds=_CATALOG_CACHE_TTL_SECONDS,
+            max_entries=_CATALOG_CACHE_MAX_ENTRIES,
+            loader=lambda: _extract_remote_items(
+                fetch_all_aidp_knowledge_bases_impl(
+                    server_url, api_key, keyword=normalized_keyword
+                )
+            ),
+            force_refresh=force_refresh,
+        )
+
     return _get_or_load_cached(
         cache=_catalog_cache,
         inflight=_catalog_inflight,
         versions=_catalog_versions,
-        key=key,
+        key=catalog_key,
         ttl_seconds=_CATALOG_CACHE_TTL_SECONDS,
         max_entries=_CATALOG_CACHE_MAX_ENTRIES,
         loader=lambda: _extract_remote_items(
@@ -201,8 +233,14 @@ def resolve_current_aidp_access(
     tenant_id: str,
     aidp_tenant_id: str = "aidp",
     force_refresh: bool = False,
+    keyword: str | None = None,
 ) -> AidpAccessSnapshot:
-    """Return the current AIDP catalog intersected with local user access."""
+    """Return the current AIDP catalog intersected with local user access.
+
+    ``keyword`` narrows the remote catalog server-side before the permission
+    intersection runs, so the returned snapshot only contains matching KBs.
+    Passing ``None``/blank keeps the full catalog.
+    """
     started_at = time.perf_counter()
     remote_started_at = time.perf_counter()
     remote_items = _get_remote_catalog(
@@ -210,6 +248,7 @@ def resolve_current_aidp_access(
         api_key=api_key,
         aidp_tenant_id=aidp_tenant_id,
         force_refresh=force_refresh,
+        keyword=keyword,
     )
     remote_ms = (time.perf_counter() - remote_started_at) * 1000
     permission_started_at = time.perf_counter()
@@ -262,16 +301,39 @@ def invalidate_aidp_catalog_cache(
     api_key: str | None = None,
     aidp_tenant_id: str = "aidp",
 ) -> None:
-    """Invalidate one credential-scoped catalog, or every catalog when omitted."""
+    """Invalidate one credential-scoped catalog, or every catalog when omitted.
+
+    Keyword-filtered catalogs are dropped alongside the full catalog: they are
+    projections of the same remote data, so leaving them behind would let a
+    stale search result outlive the mutation that invalidated the listing.
+    """
     with _cache_lock:
         if server_url is None or api_key is None:
             _catalog_cache.clear()
             for key in set(_catalog_versions) | set(_catalog_inflight):
                 _catalog_versions[key] = _catalog_versions.get(key, 0) + 1
+            _search_catalog_cache.clear()
+            for search_key in set(_search_catalog_versions) | set(_search_catalog_inflight):
+                _search_catalog_versions[search_key] = (
+                    _search_catalog_versions.get(search_key, 0) + 1
+                )
             return
         key = _cache_key(server_url, aidp_tenant_id)
         _catalog_cache.pop(key, None)
         _catalog_versions[key] = _catalog_versions.get(key, 0) + 1
+
+        # Search keys are ``(*catalog_key, keyword)``; match them by prefix.
+        for search_key in [
+            candidate
+            for candidate in set(_search_catalog_cache)
+            | set(_search_catalog_versions)
+            | set(_search_catalog_inflight)
+            if candidate[:2] == key
+        ]:
+            _search_catalog_cache.pop(search_key, None)
+            _search_catalog_versions[search_key] = (
+                _search_catalog_versions.get(search_key, 0) + 1
+            )
 
 
 def invalidate_aidp_kb_detail_cache(
