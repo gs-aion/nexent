@@ -22,15 +22,20 @@ _DETAIL_CACHE_TTL_SECONDS = 60.0
 _DETAIL_CACHE_MAX_ENTRIES = 256
 _DOC_COUNT_CACHE_TTL_SECONDS = 30.0
 _DOC_COUNT_CACHE_MAX_ENTRIES = 256
+_CHANNELS_CACHE_TTL_SECONDS = 60.0
+_CHANNELS_CACHE_MAX_ENTRIES = 32
 _catalog_cache: OrderedDict[tuple[str, str], tuple[float, list[dict]]] = OrderedDict()
 _detail_cache: OrderedDict[tuple[str, str, str], tuple[float, dict]] = OrderedDict()
 _doc_count_cache: OrderedDict[tuple[str, str, str], tuple[float, int]] = OrderedDict()
+_channels_cache: OrderedDict[tuple[str, str], tuple[float, list[dict]]] = OrderedDict()
 _catalog_inflight: dict[tuple[str, str], Future[Any]] = {}
 _detail_inflight: dict[tuple[str, str, str], Future[Any]] = {}
 _doc_count_inflight: dict[tuple[str, str, str], Future[Any]] = {}
+_channels_inflight: dict[tuple[str, str], Future[Any]] = {}
 _catalog_versions: dict[tuple[str, str], int] = {}
 _detail_versions: dict[tuple[str, str, str], int] = {}
 _doc_count_versions: dict[tuple[str, str, str], int] = {}
+_channels_versions: dict[tuple[str, str], int] = {}
 # Keyword-filtered catalogs live in their own namespace. Sharing ``_catalog_cache``
 # would let a search result overwrite the full catalog under the same key and
 # silently hide KBs from every non-search caller for the rest of the TTL.
@@ -226,6 +231,38 @@ def get_cached_aidp_doc_count(
     )
 
 
+def get_cached_aidp_channels(
+    server_url: str,
+    api_key: str,
+    loader: Callable[[], Any],
+    aidp_tenant_id: str = "aidp",
+    force_refresh: bool = False,
+) -> list[dict]:
+    """Return the tenant's AIDP ingestion channels with short-lived caching.
+
+    Every document-list request resolves a channel, and the UI polls that list
+    while files are still being processed, so the channel catalog is cached to
+    keep polling at one upstream request per interval. Channels describe
+    ingestion pipelines and are not affected by uploads, so a plain TTL is
+    enough — there is nothing to invalidate on write.
+    """
+
+    def _load() -> list[dict]:
+        return _extract_remote_items(loader())
+
+    key = _cache_key(server_url, aidp_tenant_id)
+    return _get_or_load_cached(
+        cache=_channels_cache,
+        inflight=_channels_inflight,
+        versions=_channels_versions,
+        key=key,
+        ttl_seconds=_CHANNELS_CACHE_TTL_SECONDS,
+        max_entries=_CHANNELS_CACHE_MAX_ENTRIES,
+        loader=_load,
+        force_refresh=force_refresh,
+    )
+
+
 def resolve_current_aidp_access(
     server_url: str,
     api_key: str,
@@ -386,6 +423,7 @@ def invalidate_aidp_doc_count_cache(
 
 __all__ = [
     "AidpAccessSnapshot",
+    "get_cached_aidp_channels",
     "get_cached_aidp_doc_count",
     "get_cached_aidp_kb_detail",
     "invalidate_aidp_catalog_cache",

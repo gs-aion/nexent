@@ -11,7 +11,10 @@ import {
   TWO_COLUMN_LAYOUT,
   STANDARD_CARD,
 } from "@/const/layoutConstants";
-import { KB_SEARCH_DEBOUNCE_MS } from "@/const/knowledgeBase";
+import {
+  AIDP_DOC_STATUS_POLL_MS,
+  KB_SEARCH_DEBOUNCE_MS,
+} from "@/const/knowledgeBase";
 import type { AidpKnowledgeBaseItem } from "@/types/agentConfig";
 import aidpKnowledgeService, {
   type AidpKbDetail,
@@ -47,6 +50,9 @@ const AidpKnowledgeConfiguration: React.FC = () => {
   const [totalDocs, setTotalDocs] = useState(0);
   const [docHasMore, setDocHasMore] = useState(false);
   const [docTotalReliable, setDocTotalReliable] = useState(true);
+  // Files still being processed across the whole knowledge base (not just the
+  // visible page). Drives the status polling below.
+  const [docProcessingCount, setDocProcessingCount] = useState(0);
   const [loadingDocs, setLoadingDocs] = useState(false);
 
   // ---- Pagination state ----
@@ -127,9 +133,15 @@ const AidpKnowledgeConfiguration: React.FC = () => {
   }, []);
 
   // ---- Fetch documents for active KB (server-side pagination) ----
+  // `silent` refreshes are used by the status poller: the table keeps rendering
+  // the previous page instead of flashing the loading placeholder, and a failed
+  // poll stays out of the way (logged only) so a short upstream hiccup cannot
+  // spam the user with a toast every interval. The manual refresh button always
+  // runs a non-silent fetch, so errors stay visible when the user asks for them.
   const fetchDocs = useCallback(
-    async (kbId: string, page: number = 1) => {
-      setLoadingDocs(true);
+    async (kbId: string, page: number = 1, options?: { silent?: boolean }) => {
+      const silent = options?.silent === true;
+      if (!silent) setLoadingDocs(true);
       try {
         const result = await aidpKnowledgeService.listDocs(
           kbId,
@@ -141,20 +153,39 @@ const AidpKnowledgeConfiguration: React.FC = () => {
         setTotalDocs(count);
         setDocHasMore(result.has_more ?? false);
         setDocTotalReliable(result.total_reliable !== false);
+        setDocProcessingCount(result.processing_count ?? 0);
         setDocPage(page);
       } catch (error) {
         log.error("Failed to fetch AIDP documents:", error);
-        appMessage.error(t("aidpKnowledge.fetchDocsFailed"));
-        setDocuments([]);
-        setTotalDocs(0);
-        setDocHasMore(false);
-        setDocTotalReliable(false);
+        if (!silent) {
+          appMessage.error(t("aidpKnowledge.fetchDocsFailed"));
+          setDocuments([]);
+          setTotalDocs(0);
+          setDocHasMore(false);
+          setDocTotalReliable(false);
+          setDocProcessingCount(0);
+        }
       } finally {
-        setLoadingDocs(false);
+        if (!silent) setLoadingDocs(false);
       }
     },
     [appMessage, t]
   );
+
+  // ---- Poll document status while anything is still being processed ----
+  // AIDP ingests uploaded files asynchronously (chunking, embedding, indexing),
+  // so the list refreshes itself every AIDP_DOC_STATUS_POLL_MS until every file
+  // reports a terminal status (COMPLETED/FAILED). `docProcessingCount` counts
+  // the whole knowledge base, so polling also continues while a processing file
+  // sits on a page the user is not looking at. Changing KB or page restarts the
+  // timer, and unmounting clears it.
+  useEffect(() => {
+    if (!activeKbId || docProcessingCount <= 0) return;
+    const timer = window.setInterval(() => {
+      void fetchDocs(activeKbId, docPage, { silent: true });
+    }, AIDP_DOC_STATUS_POLL_MS);
+    return () => window.clearInterval(timer);
+  }, [activeKbId, docPage, docProcessingCount, fetchDocs]);
 
   // ---- Handle KB selection ----
   const handleSelectKb = useCallback(
@@ -164,6 +195,7 @@ const AidpKnowledgeConfiguration: React.FC = () => {
       setDocPage(1);
       setDocHasMore(false);
       setDocTotalReliable(true);
+      setDocProcessingCount(0);
       fetchDocs(kb.kds_id, 1);
     },
     [fetchDocs]
@@ -195,6 +227,7 @@ const AidpKnowledgeConfiguration: React.FC = () => {
               setTotalDocs(0);
               setDocHasMore(false);
               setDocTotalReliable(true);
+              setDocProcessingCount(0);
               setDocPage(1);
             }
 
@@ -256,6 +289,7 @@ const AidpKnowledgeConfiguration: React.FC = () => {
       setDocPage(1);
       setDocHasMore(false);
       setDocTotalReliable(true);
+      setDocProcessingCount(0);
       void fetchDocs(newKb.kds_id, 1);
     },
     [fetchDocs, kbPage]

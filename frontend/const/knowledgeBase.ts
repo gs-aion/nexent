@@ -28,6 +28,21 @@ export const NON_TERMINAL_STATUSES: string[] = [
   DOCUMENT_STATUS.FORWARDING,
 ];
 
+// AIDP knowledge-file processing statuses, as reported by the AIDP file
+// history endpoint. AIDP uses a smaller vocabulary than the local knowledge
+// base: files are either being ingested, ingested, or failed for good.
+export const AIDP_DOCUMENT_STATUS = {
+  PROCESSING: "PROCESSING",
+  COMPLETED: "COMPLETED",
+  FAILED: "FAILED",
+} as const;
+
+// Polling interval for the AIDP document list while files are being processed.
+// AIDP ingestion (chunking, embedding, indexing) takes seconds to minutes, so
+// ten seconds keeps the status column responsive without hammering the backend.
+// Polling stops as soon as no file reports PROCESSING any more.
+export const AIDP_DOC_STATUS_POLL_MS = 10000;
+
 // Document action type constants
 export const DOCUMENT_ACTION_TYPES = {
   FETCH_SUCCESS: "FETCH_SUCCESS",

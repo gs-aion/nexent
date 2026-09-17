@@ -1,7 +1,7 @@
 import React, { useState, useCallback, useRef } from "react";
 import { useTranslation } from "react-i18next";
 
-import { Button, Pagination, Upload, message, Tooltip } from "antd";
+import { Button, Pagination, Tag, Upload, message, Tooltip } from "antd";
 import {
   UploadOutlined,
   InboxOutlined,
@@ -11,7 +11,10 @@ import {
 import type { AidpKnowledgeBaseItem } from "@/types/agentConfig";
 import type { AidpDocumentItem } from "@/ext_components/aidp/services/aidpKnowledgeService";
 import aidpKnowledgeService from "@/ext_components/aidp/services/aidpKnowledgeService";
-import { AIDP_ACCEPT_STRING } from "@/const/knowledgeBase";
+import {
+  AIDP_ACCEPT_STRING,
+  AIDP_DOCUMENT_STATUS,
+} from "@/const/knowledgeBase";
 import { partitionAidpFiles } from "@/services/uploadService";
 import { TruncatedText } from "@/components/common/TruncatedText";
 
@@ -59,6 +62,56 @@ const DocumentNameCell: React.FC<{ fileName: string; fileInoNo: string }> = ({
     <div className="text-xs text-gray-400">{fileInoNo}</div>
   </td>
 );
+
+/**
+ * Table cell showing the ingestion status of a document.
+ *
+ * `PROCESSING` is blue because the file is still on its way in (chunking,
+ * embedding, indexing) and the list keeps refreshing itself until it resolves;
+ * `COMPLETED` green and `FAILED` red are the two terminal outcomes. A missing
+ * status means the backend fell back to the completed-files listing, which only
+ * reports ingested files — those render as a dash like any other empty cell. An
+ * unrecognised status is shown verbatim rather than hidden, so a new AIDP
+ * status is visible instead of silently blank.
+ */
+const DocumentStatusCell: React.FC<{ status?: string }> = ({ status }) => {
+  const { t } = useTranslation();
+  const normalized = (status || "").trim().toUpperCase();
+
+  if (!normalized) {
+    return <td className="px-4 py-2 text-sm text-gray-600">-</td>;
+  }
+
+  if (normalized === AIDP_DOCUMENT_STATUS.PROCESSING) {
+    return (
+      <td className="px-4 py-2">
+        <Tag color="processing">{t("aidpKnowledge.docStatusProcessing")}</Tag>
+      </td>
+    );
+  }
+
+  if (normalized === AIDP_DOCUMENT_STATUS.COMPLETED) {
+    return (
+      <td className="px-4 py-2">
+        <Tag color="success">{t("aidpKnowledge.docStatusCompleted")}</Tag>
+      </td>
+    );
+  }
+
+  if (normalized === AIDP_DOCUMENT_STATUS.FAILED) {
+    return (
+      <td className="px-4 py-2">
+        <Tag color="error">{t("aidpKnowledge.docStatusFailed")}</Tag>
+      </td>
+    );
+  }
+
+  return (
+    <td className="px-4 py-2">
+      <Tag>{status}</Tag>
+    </td>
+  );
+};
 
 interface AidpDocumentListProps {
   activeKb: AidpKnowledgeBaseItem | null;
@@ -230,6 +283,9 @@ const AidpDocumentList: React.FC<AidpDocumentListProps> = ({
                     {t("aidpKnowledge.docType")}
                   </th>
                   <th className="px-4 py-2 text-left text-xs font-medium text-gray-500 uppercase">
+                    {t("aidpKnowledge.docStatus")}
+                  </th>
+                  <th className="px-4 py-2 text-left text-xs font-medium text-gray-500 uppercase">
                     {t("aidpKnowledge.docSize")}
                   </th>
                   <th className="px-4 py-2 text-left text-xs font-medium text-gray-500 uppercase">
@@ -247,6 +303,7 @@ const AidpDocumentList: React.FC<AidpDocumentListProps> = ({
                     <td className="px-4 py-2 text-sm text-gray-600">
                       {doc.file_type || "-"}
                     </td>
+                    <DocumentStatusCell status={doc.status} />
                     <td className="px-4 py-2 text-sm text-gray-600">
                       {formatSize(doc.file_size)}
                     </td>
