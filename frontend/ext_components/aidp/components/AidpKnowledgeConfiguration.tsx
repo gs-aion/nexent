@@ -1,6 +1,6 @@
 "use client";
 
-import React, { useState, useEffect, useCallback } from "react";
+import React, { useState, useEffect, useCallback, useRef } from "react";
 import { useTranslation } from "react-i18next";
 
 import { App, Row, Col, Modal } from "antd";
@@ -11,10 +11,12 @@ import {
   TWO_COLUMN_LAYOUT,
   STANDARD_CARD,
 } from "@/const/layoutConstants";
+import { KB_SEARCH_DEBOUNCE_MS } from "@/const/knowledgeBase";
 import {
   AIDP_DOC_STATUS_POLL_MS,
-  KB_SEARCH_DEBOUNCE_MS,
-} from "@/const/knowledgeBase";
+  AIDP_DOC_UPLOAD_WATCH_TIMEOUT_MS,
+  findPendingUploadIds,
+} from "@/lib/aidpDocumentStatus";
 import type { AidpKnowledgeBaseItem } from "@/types/agentConfig";
 import aidpKnowledgeService, {
   type AidpKbDetail,
@@ -155,6 +157,19 @@ const AidpKnowledgeConfiguration: React.FC = () => {
         setDocTotalReliable(result.total_reliable !== false);
         setDocProcessingCount(result.processing_count ?? 0);
         setDocPage(page);
+
+        // Settle the upload watch: a just-uploaded file counts as done only
+        // once it is listed with a terminal status. Files AIDP has not listed
+        // yet stay pending on purpose, so the refresh keeps running instead of
+        // stopping while the list is still missing the upload.
+        if (pendingUploadIdsRef.current.length > 0) {
+          const stillPending = findPendingUploadIds(
+            pendingUploadIdsRef.current,
+            result.value
+          );
+          pendingUploadIdsRef.current = stillPending;
+          if (stillPending.length === 0) setUploadWatchActive(false);
+        }
       } catch (error) {
         log.error("Failed to fetch AIDP documents:", error);
         if (!silent) {
@@ -172,24 +187,68 @@ const AidpKnowledgeConfiguration: React.FC = () => {
     [appMessage, t]
   );
 
-  // ---- Poll document status while anything is still being processed ----
-  // AIDP ingests uploaded files asynchronously (chunking, embedding, indexing),
-  // so the list refreshes itself every AIDP_DOC_STATUS_POLL_MS until every file
-  // reports a terminal status (COMPLETED/FAILED). `docProcessingCount` counts
-  // the whole knowledge base, so polling also continues while a processing file
-  // sits on a page the user is not looking at. Changing KB or page restarts the
-  // timer, and unmounting clears it.
+  // ---- Upload watch - state - ---
+  // Files the user just uploaded and that are not settled yet. Kept in a ref
+  // so `fetchDocs` can settle them without becoming a new function on every
+  // watch update (which would restart the polling interval).
+  const pendingUploadIdsRef = useRef<string[]>([]);
+  const uploadWatchStartedAtRef = useRef(0);
+  const [uploadWatchActive, setUploadWatchActive] = useState(false);
+
+  /** Start refreshing until every just-uploaded file reaches a terminal state. */
+  const startUploadWatch = useCallback((uploadedFileIds: string[]) => {
+    if (uploadedFileIds.length === 0) return;
+    pendingUploadIdsRef.current = uploadedFileIds;
+    uploadWatchStartedAtRef.current = Date.now();
+    setUploadWatchActive(true);
+  }, []);
+
+  /** Stop watching uploads (no upload in flight to wait for). */
+  const stopUploadWatch = useCallback(() => {
+    pendingUploadIdsRef.current = [];
+    setUploadWatchActive(false);
+  }, []);
+
+  // ---- Poll the document list while work is outstanding ----
+  // Two independent reasons to poll:
+  //   * a file just uploaded by the user has not settled yet (`uploadWatchActive`),
+  //     which covers the window where AIDP has accepted the upload but does not
+  //     list it yet - polling on processing_count alone would never start there;
+  //   * the knowledge base still reports files being ingested
+  //     (`docProcessingCount`, counted across the whole KB, so a processing file
+  //     on another page keeps the status column live).
+  // Polling stops once neither holds: every file is COMPLETED or FAILED. The
+  // upload watch additionally gives up after AIDP_DOC_UPLOAD_WATCH_TIMEOUT_MS so
+  // a silently dropped upload cannot keep the list refreshing forever.
+  const shouldPollDocs = uploadWatchActive || docProcessingCount > 0;
   useEffect(() => {
-    if (!activeKbId || docProcessingCount <= 0) return;
-    const timer = window.setInterval(() => {
+    if (!activeKbId || !shouldPollDocs) return;
+    const tick = () => {
+      if (
+        uploadWatchActive &&
+        Date.now() - uploadWatchStartedAtRef.current >
+          AIDP_DOC_UPLOAD_WATCH_TIMEOUT_MS
+      ) {
+        stopUploadWatch();
+        return;
+      }
       void fetchDocs(activeKbId, docPage, { silent: true });
-    }, AIDP_DOC_STATUS_POLL_MS);
+    };
+    const timer = window.setInterval(tick, AIDP_DOC_STATUS_POLL_MS);
     return () => window.clearInterval(timer);
-  }, [activeKbId, docPage, docProcessingCount, fetchDocs]);
+  }, [
+    activeKbId,
+    docPage,
+    shouldPollDocs,
+    uploadWatchActive,
+    fetchDocs,
+    stopUploadWatch,
+  ]);
 
   // ---- Handle KB selection ----
   const handleSelectKb = useCallback(
     (kb: AidpKnowledgeBaseItem) => {
+      stopUploadWatch();
       setActiveKbId(kb.kds_id);
       setSelectedKb(kb);
       setDocPage(1);
@@ -198,7 +257,7 @@ const AidpKnowledgeConfiguration: React.FC = () => {
       setDocProcessingCount(0);
       fetchDocs(kb.kds_id, 1);
     },
-    [fetchDocs]
+    [fetchDocs, stopUploadWatch]
   );
 
   // ---- Handle KB deletion ----
@@ -220,6 +279,7 @@ const AidpKnowledgeConfiguration: React.FC = () => {
 
             // If the deleted KB was active, clear selection
             if (activeKbId === kb.kds_id) {
+              stopUploadWatch();
               setActiveKbId(null);
               setSelectedKb(null);
               setActiveKbDetail(null);
@@ -239,7 +299,15 @@ const AidpKnowledgeConfiguration: React.FC = () => {
         },
       });
     },
-    [activeKbId, appMessage, t, fetchKbs, kbPage, debouncedKbKeyword]
+    [
+      activeKbId,
+      appMessage,
+      t,
+      fetchKbs,
+      kbPage,
+      debouncedKbKeyword,
+      stopUploadWatch,
+    ]
   );
 
   // ---- Edit KB ----
@@ -267,9 +335,11 @@ const AidpKnowledgeConfiguration: React.FC = () => {
 
   // ---- After create success ----
   // The create response already contains the resource. Insert it locally
-  // instead of scanning up to 50 expensive server-side pages.
+  // instead of scanning up to 50 expensive server-side pages. Files uploaded
+  // together with the KB are watched like any other upload so their processing
+  // status appears without a manual refresh.
   const handleCreateKbSuccess = useCallback(
-    (newKb: AidpKnowledgeBaseItem) => {
+    (newKb: AidpKnowledgeBaseItem, uploadedFileIds: string[] = []) => {
       setCreateModalOpen(false);
       setKbs((current) =>
         [newKb, ...current.filter((kb) => kb.kds_id !== newKb.kds_id)].slice(
@@ -283,6 +353,8 @@ const AidpKnowledgeConfiguration: React.FC = () => {
         return nextTotal;
       });
       setKbTotalReliable(true);
+      stopUploadWatch();
+      startUploadWatch(uploadedFileIds);
       setActiveKbId(newKb.kds_id);
       setSelectedKb(newKb);
       setActiveKbDetail(newKb);
@@ -292,35 +364,55 @@ const AidpKnowledgeConfiguration: React.FC = () => {
       setDocProcessingCount(0);
       void fetchDocs(newKb.kds_id, 1);
     },
-    [fetchDocs, kbPage]
+    [fetchDocs, kbPage, startUploadWatch, stopUploadWatch]
   );
 
+  // ---- Refresh the active KB metadata (counts / name) ----
+  const refreshActiveKbDetail = useCallback(() => {
+    if (!activeKbId) return;
+    void aidpKnowledgeService
+      .getKb(activeKbId)
+      .then((detail) => {
+        const refreshed = {
+          ...selectedKb,
+          ...detail,
+          kds_id: activeKbId,
+          kds_name: detail.kds_name || selectedKb?.kds_name || activeKbId,
+        } as AidpKnowledgeBaseItem;
+        setSelectedKb(refreshed);
+        setActiveKbDetail(detail);
+        setKbs((current) =>
+          current.map((kb) => (kb.kds_id === activeKbId ? refreshed : kb))
+        );
+      })
+      .catch((error) =>
+        log.error("Failed to refresh active AIDP KB detail:", error)
+      );
+  }, [activeKbId, selectedKb]);
+
   // ---- After documents uploaded ----
-  const handleDocsUploaded = useCallback(() => {
-    if (activeKbId) {
+  // Refresh immediately so the uploaded files show up without the user having
+  // to press refresh, then watch them until AIDP reports a terminal status.
+  const handleDocsUploaded = useCallback(
+    (uploadedFileIds: string[]) => {
+      startUploadWatch(uploadedFileIds);
+      if (!activeKbId) return;
       // Reset doc pagination to page 1 so data and pagination UI stay in sync
       setDocPage(1);
       void fetchDocs(activeKbId, 1);
-      void aidpKnowledgeService
-        .getKb(activeKbId)
-        .then((detail) => {
-          const refreshed = {
-            ...selectedKb,
-            ...detail,
-            kds_id: activeKbId,
-            kds_name: detail.kds_name || selectedKb?.kds_name || activeKbId,
-          } as AidpKnowledgeBaseItem;
-          setSelectedKb(refreshed);
-          setActiveKbDetail(detail);
-          setKbs((current) =>
-            current.map((kb) => (kb.kds_id === activeKbId ? refreshed : kb))
-          );
-        })
-        .catch((error) =>
-          log.error("Failed to refresh active AIDP KB detail:", error)
-        );
-    }
-  }, [activeKbId, fetchDocs, selectedKb]);
+      refreshActiveKbDetail();
+    },
+    [activeKbId, fetchDocs, refreshActiveKbDetail, startUploadWatch]
+  );
+
+  // ---- Manual refresh (refresh button) ----
+  // Refreshes the visible page and the KB metadata but never starts an upload
+  // watch: the user is not waiting for a file they just added.
+  const handleRefreshDocs = useCallback(() => {
+    if (!activeKbId) return;
+    void fetchDocs(activeKbId, docPage);
+    refreshActiveKbDetail();
+  }, [activeKbId, docPage, fetchDocs, refreshActiveKbDetail]);
 
   // Active KB item is stored in `selectedKb` state (not derived from `kbs`),
   // because the KB list is server-paginated and refetching it after upload
@@ -385,9 +477,14 @@ const AidpKnowledgeConfiguration: React.FC = () => {
                 isLoading={loadingDocs}
                 currentPage={docPage}
                 pageSize={DOC_PAGE_SIZE}
-                onPageChange={(page) => fetchDocs(activeKbId!, page)}
+                onPageChange={(page) => {
+                  // The upload watch only makes sense on the page the upload
+                  // landed on; the status poller still covers other pages.
+                  stopUploadWatch();
+                  void fetchDocs(activeKbId!, page);
+                }}
                 onDocsUploaded={handleDocsUploaded}
-                onRefresh={handleDocsUploaded}
+                onRefresh={handleRefreshDocs}
               />
             ) : (
               <div

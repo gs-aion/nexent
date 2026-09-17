@@ -11,10 +11,12 @@ import {
 import type { AidpKnowledgeBaseItem } from "@/types/agentConfig";
 import type { AidpDocumentItem } from "@/ext_components/aidp/services/aidpKnowledgeService";
 import aidpKnowledgeService from "@/ext_components/aidp/services/aidpKnowledgeService";
+import { AIDP_ACCEPT_STRING } from "@/const/knowledgeBase";
 import {
-  AIDP_ACCEPT_STRING,
   AIDP_DOCUMENT_STATUS,
-} from "@/const/knowledgeBase";
+  collectUploadedFileIds,
+  normalizeAidpDocStatus,
+} from "@/lib/aidpDocumentStatus";
 import { partitionAidpFiles } from "@/services/uploadService";
 import { TruncatedText } from "@/components/common/TruncatedText";
 
@@ -76,7 +78,7 @@ const DocumentNameCell: React.FC<{ fileName: string; fileInoNo: string }> = ({
  */
 const DocumentStatusCell: React.FC<{ status?: string }> = ({ status }) => {
   const { t } = useTranslation();
-  const normalized = (status || "").trim().toUpperCase();
+  const normalized = normalizeAidpDocStatus(status);
 
   if (!normalized) {
     return <td className="px-4 py-2 text-sm text-gray-600">-</td>;
@@ -125,7 +127,10 @@ interface AidpDocumentListProps {
   currentPage: number;
   pageSize: number;
   onPageChange: (page: number) => void;
-  onDocsUploaded: () => void;
+  /** Called after an upload is accepted, with the ids AIDP returned for the
+   *  accepted files. The parent uses them to keep refreshing the list until
+   *  each uploaded file reports a terminal processing status. */
+  onDocsUploaded: (uploadedFileIds: string[]) => void;
   onRefresh: () => void;
 }
 
@@ -204,12 +209,12 @@ const AidpDocumentList: React.FC<AidpDocumentListProps> = ({
               {failureLines}
             </div>
           );
-          onDocsUploaded();
+          onDocsUploaded(collectUploadedFileIds(result.success_list));
         } else {
           message.success(
             t("aidpKnowledge.uploadSuccess", { count: result.summary.success })
           );
-          onDocsUploaded();
+          onDocsUploaded(collectUploadedFileIds(result.success_list));
         }
       } catch (error) {
         const reason =
